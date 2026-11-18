@@ -30,7 +30,7 @@ public final class LuaRuntime {
 
     public synchronized void stop() {
         Context context = current; current = null;
-        if (context != null) context.stop("Script stopped. Hooks removed.");
+        if (context != null) context.stop("Script stopped.");
     }
 
     public boolean isRunning() { Context context = current; return context != null && context.active.get(); }
