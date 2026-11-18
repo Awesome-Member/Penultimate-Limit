@@ -22,15 +22,15 @@ public final class LuaRuntime {
 
     private LuaRuntime() { }
 
-    public synchronized void start(String source, String name, Consumer<String> output) {
+    public synchronized void start(String source, String name, Consumer<String> output, Consumer<String> status) {
         stop();
-        Context context = new Context(output); current = context;
+        Context context = new Context(output, status); current = context;
         workers.execute(() -> context.run(source, name));
     }
 
     public synchronized void stop() {
         Context context = current; current = null;
-        if (context != null) context.stop("Script stopped.");
+        if (context != null) context.stop("Stopped");
     }
 
     public boolean isRunning() { Context context = current; return context != null && context.active.get(); }
@@ -58,11 +58,12 @@ public final class LuaRuntime {
         final List<Hooks.Handle> subscriptions = new ArrayList<>();
         final ThreadLocal<Budget> budget = new ThreadLocal<>();
         final Consumer<String> output;
+        final Consumer<String> status;
         volatile Thread worker;
         long logWindow;
         int logCount;
 
-        Context(Consumer<String> output) { this.output = output; }
+        Context(Consumer<String> output, Consumer<String> status) { this.output = output; this.status = status; }
 
         synchronized void log(String text) {
             long now = System.nanoTime();
@@ -70,12 +71,15 @@ public final class LuaRuntime {
             if (++logCount <= 100) output.accept(text.length() > 4000 ? text.substring(0, 4000) + "…" : text);
         }
 
-        void stop(String reason) {
+        void stop(String state) { stop(state, null); }
+
+        void stop(String state, String error) {
             if (!active.getAndSet(false)) return;
             synchronized (subscriptions) { for (Hooks.Handle handle : subscriptions) handle.close(); subscriptions.clear(); }
             Thread thread = worker;
             if (thread != null && thread != Thread.currentThread()) thread.interrupt();
-            output.accept(reason);
+            if (error != null) output.accept(error);
+            status.accept(state);
         }
 
         void track(Hooks.Handle handle) {
@@ -112,7 +116,7 @@ public final class LuaRuntime {
                 });
                 LuaTable script = new LuaTable();
                 script.set("stop", new ZeroArgFunction() {
-                    @Override public LuaValue call() { stop("Script stopped. Hooks removed."); return LuaValue.NIL; }
+                    @Override public LuaValue call() { stop("Stopped"); return LuaValue.NIL; }
                 });
                 globals.set("script", script);
                 globals.set("java", javaBridge(globals.get("luajava").get("bindClass")));
@@ -122,12 +126,11 @@ public final class LuaRuntime {
                 globals.load(source, name).call();
                 if (active.get()) {
                     synchronized (subscriptions) {
-                        if (subscriptions.isEmpty()) stop("Script completed.");
-                        else log("Script running. Active hooks: " + subscriptions.size());
+                        if (subscriptions.isEmpty()) stop("Completed");
                     }
                 }
-            } catch (VirtualMachineError | ThreadDeath fatal) { stop("Fatal JVM error."); throw fatal; }
-            catch (Throwable exception) { if (active.get()) stop("Script error: " + exception); }
+            } catch (VirtualMachineError | ThreadDeath fatal) { stop("Error", "Fatal JVM error: " + fatal); throw fatal; }
+            catch (Throwable exception) { stop("Error", "Script error: " + exception); }
             finally { budget.remove(); worker = null; lock.unlock(); Thread.interrupted(); }
         }
 
@@ -187,8 +190,8 @@ public final class LuaRuntime {
                 System.arraycopy(updated, 0, call.args, 0, updated.length);
                 call.result = result;
                 if (cancelled[0]) call.cancel(result);
-            } catch (VirtualMachineError | ThreadDeath fatal) { stop("Fatal JVM error."); throw fatal; }
-            catch (Throwable exception) { stop("Hook error: " + exception); }
+            } catch (VirtualMachineError | ThreadDeath fatal) { stop("Error", "Fatal JVM error: " + fatal); throw fatal; }
+            catch (Throwable exception) { stop("Error", "Hook error: " + exception); }
             finally { if (previous == null) budget.remove(); else budget.set(previous); lock.unlock(); }
         }
     }

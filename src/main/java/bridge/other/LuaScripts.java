@@ -42,6 +42,7 @@ public final class LuaScripts extends ClickGui.Feature {
         private final JLabel position = new JLabel("1:1");
         private Path file;
         private boolean modified;
+        private int runId;
 
         Editor() {
             super(Main.instance == null ? null : SwingUtilities.getWindowAncestor(Main.instance),
@@ -57,8 +58,12 @@ public final class LuaScripts extends ClickGui.Feature {
             button(toolbar, "Save", this::saveFile);
             button(toolbar, "Run", () -> {
                 console.setText("");
-                status.setText(LuaRuntime.INSTANCE.hasAgent() ? "Lua · init" : "Lua · error");
-                LuaRuntime.INSTANCE.start(code.getText(), file == null ? "editor.lua" : file.toString(), this::log);
+                status.setText("Running");
+                int run = ++runId;
+                LuaRuntime.INSTANCE.start(code.getText(), file == null ? "editor.lua" : file.toString(),
+                        message -> log(run, message), state -> SwingUtilities.invokeLater(() -> {
+                            if (run == runId) status.setText(state);
+                        }));
             });
             button(toolbar, "Stop", () -> { LuaRuntime.INSTANCE.stop(); status.setText("Stopped"); });
             root.add(toolbar, BorderLayout.NORTH);
@@ -109,8 +114,9 @@ public final class LuaScripts extends ClickGui.Feature {
             shortcut("control S", "save", this::saveFile);
         }
 
-        private void log(String message) {
+        private void log(int run, String message) {
             SwingUtilities.invokeLater(() -> {
+                if (run != runId) return;
                 console.append(message + "\n");
                 if (console.getDocument().getLength() > 30000) console.replaceRange("", 0, console.getDocument().getLength() - 20000);
                 console.setCaretPosition(console.getDocument().getLength());
