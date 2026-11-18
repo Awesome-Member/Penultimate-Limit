@@ -1,0 +1,30 @@
+{
+  "required": true,
+  "minVersion": "0.8.7",
+  "package": "bridge.mixin",
+  "compatibilityLevel": "JAVA_8",
+  "mixins": [
+    "GameMixin",
+    "JuiceMapBufferMixin",
+    "QuestPortalMixin",
+    "JuicePortalMixin",
+    "JuiceRewardMixin",
+    "DesktopMixin",
+    "TileMapMixin",
+    "MovementMixin",
+    "GraphicsMixin",
+    "StrategTextMixin",
+    "OtherStrategTextMixin",
+    "ZoomWheelMixin",
+    "ZoomCanvasMixin",
+    "ZoomMouseMixin",
+    "ZoomMotionMixin",
+    "ZoomResizeMixin",
+    "ObjectApproachMixin",
+    "AutoBattleMixin",
+    "SkinChangerMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}
