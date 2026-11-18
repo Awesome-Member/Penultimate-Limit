@@ -54,8 +54,10 @@ import java.io.OutputStream;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.util.Date;
+import java.util.Arrays;
 import java.util.Iterator;
 import java.util.Vector;
+import java.util.regex.Pattern;
 import desktop.io.HttpConnectionAdapter;
 import desktop.io.SocketConnection;
 import desktop.ui.Display;
@@ -1332,6 +1334,33 @@ public final class Com {
       }
    }
 
+   private static final Pattern PAYMENT_HELP = Pattern.compile(
+           "плат[её]ж|оплат|платн|донат|пожертв|реальн\\w*\\s+деньг|"
+                   + "купить\\s+кристалл|покупк\\w*\\s+кристалл|пополн\\w*\\s+кристалл|"
+                   + "\\b(?:смс|sms|payments?|billing|donat\\w*|xsolla|nextpay)\\b",
+           Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CHARACTER_CLASS);
+
+   private static void loadHelpWithoutPayments(DataInputStream response) throws IOException {
+      int count = response.readInt();
+      String[] texts = new String[count], titles = new String[count], hints = new String[count];
+      for (int i = 0; i < count; i++) texts[i] = response.readUTF();
+      for (int i = 0; i < count; i++) titles[i] = response.readUTF();
+      for (int i = 0; i < count; i++) hints[i] = response.readUTF();
+
+      int kept = 0;
+      for (int i = 0; i < count; i++) {
+         if (PAYMENT_HELP.matcher(titles[i]).find() || PAYMENT_HELP.matcher(hints[i]).find()
+                 || PAYMENT_HELP.matcher(texts[i]).find()) continue;
+         texts[kept] = texts[i];
+         titles[kept] = titles[i];
+         hints[kept++] = hints[i];
+      }
+      MenuSupport support = MenuSupport.instance;
+      support.helpTexts = Arrays.copyOf(texts, kept);
+      support.helpMenuList = Arrays.copyOf(titles, kept);
+      support.helpHintsList = Arrays.copyOf(hints, kept);
+   }
+
    private static void LoadConstants(NetRequest netRequest) {
       try {
          loadInt1(netRequest);
@@ -1340,27 +1369,9 @@ public final class Com {
          netRequest.response.readUTF();
          netRequest.response.readUTF();
          netRequest.response.readUTF();
-         MenuSupport.instance.helpTexts = new String[netRequest.response.readInt()];
+         loadHelpWithoutPayments(netRequest.response);
 
          int integerCode;
-         for(integerCode = 0; integerCode < MenuSupport.instance.helpTexts.length; ++integerCode) {
-            MenuSupport.instance.helpTexts[integerCode] = netRequest.response.readUTF();
-         }
-
-         MenuSupport instance2 = MenuSupport.instance;
-         instance2.helpMenuList = new String[instance2.helpTexts.length];
-
-         for(integerCode = 0; integerCode < MenuSupport.instance.helpTexts.length; ++integerCode) {
-            MenuSupport.instance.helpMenuList[integerCode] = netRequest.response.readUTF();
-         }
-
-         instance2 = MenuSupport.instance;
-         instance2.helpHintsList = new String[instance2.helpTexts.length];
-
-         for(integerCode = 0; integerCode < MenuSupport.instance.helpTexts.length; ++integerCode) {
-            MenuSupport.instance.helpHintsList[integerCode] = netRequest.response.readUTF();
-         }
-
          Enemy.c_AwaySensRadCoof = netRequest.response.readInt();
          Enemy.c_StartBattleDist = netRequest.response.readInt();
          Enemy.c_StartInteresDist = netRequest.response.readInt();
