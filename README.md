@@ -1,17 +1,6 @@
 # Penultimate-Limit
 An unofficial desktop client :p
 
-## Build and run
-Requires JDK 8 and ... Maven.
+Requires JDK 8. If you plan to use mods, create a `mods/` folder next to the game JAR and put your mod JARs inside. See [this branch](https://github.com/Awesome-Member/Penultimate-Limit/tree/entropy) for an example mod.
 
-```sh
-mvn clean install
-cd target
-java -javaagent:Penultimate-Limit.jar -jar Penultimate-Limit.jar
-```
-
-## Mods
-The game supports mods. See [this]() branch for an example.
-
-To install a mod, create a `mods/` folder next to the game JAR and place
-the mod JAR inside.
+Btw don't forget to put `-javaagent:<target>` in the JVM launch arguments.
