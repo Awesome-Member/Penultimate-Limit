@@ -52,7 +52,7 @@ public final class AutoJuice extends ClickGui.Feature {
     private final ThreadLocal<MapLoad> activeMapLoad = new ThreadLocal<>();
 
     private AutoJuice() {
-        super(ClickGui.Category.OTHER, "Auto Juice", "Iterations count full forest runs; collect every available sap attempt");
+        super(ClickGui.Category.OTHER, "Auto Juice", "Auto collect iuice");
         textInput("Iterations", () -> Integer.toString(iterations),
                 value -> iterations = Integer.parseInt(value.trim()), value -> {
                     try {
