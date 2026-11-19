@@ -77,7 +77,7 @@ public abstract class GameMixin {
         if (component.id != 10017) return;
         Game game = (Game)(Object)this;
         if (QuestFollower.INSTANCE.enabled) QuestFollower.INSTANCE.stop(game);
-        if (AutoJuice.INSTANCE.enabled) AutoJuice.INSTANCE.stop(game, "Stopped by map click.");
+        if (AutoJuice.INSTANCE.enabled) AutoJuice.INSTANCE.stop(game);
         for (AutoGatherRoute route : AutoGatherRoute.routes()) {
             if (route.enabled) route.stop(game);
         }

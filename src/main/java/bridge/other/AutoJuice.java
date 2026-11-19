@@ -63,10 +63,9 @@ public final class AutoJuice extends ClickGui.Feature {
         onToggle(() -> { stage = -1; });
     }
 
-    public void stop(Game game, String reason) {
+    public void stop(Game game) {
         enabled = false; stage = -1; waiting = false; portalStage = -1;
         game.gameControllDirectData.disableControll();
-        if (reason != null) GameCommons.instance.showFloatText("Auto Juice: " + reason, 3500);
     }
 
     public void prepareMapBuffer(MapBuffer buffer, Camera camera, TileMap map, Tile[] tiles) {
@@ -154,7 +153,7 @@ public final class AutoJuice extends ClickGui.Feature {
         if (Com.mainTh.getTopPFter() != game) return;
         long now = System.currentTimeMillis();
         if (stage < 0) {
-            if (!OUTSIDE.equals(map.nameId)) { stop(game, "Start at the forest entrance on Д5."); return; }
+            if (!OUTSIDE.equals(map.nameId)) { stop(game); return; }
             if (QuestFollower.INSTANCE.enabled) QuestFollower.INSTANCE.stop(game);
             controls.disableControll(); game.gameControllAnalogData.disableControll();
             stage = 0; waiting = false;
@@ -166,7 +165,7 @@ public final class AutoJuice extends ClickGui.Feature {
             portalStage = -1;
         }
         if (stage == ROUTE.length) {
-            if (!OUTSIDE.equals(map.nameId)) { stop(game, "Unexpected map after exiting."); return; }
+            if (!OUTSIDE.equals(map.nameId)) { stop(game); return; }
             completedRuns++;
             if (completedRuns < iterationLimit) {
                 stage = 0; waiting = false; portalStage = -1;
@@ -178,16 +177,16 @@ public final class AutoJuice extends ClickGui.Feature {
                 long mapClientNanos = forestLoadNanos + outsideLoadNanos - mapRequestNanos - mapCacheReadNanos;
                 System.out.printf("[Auto Juice] Map loads: requests %d ms (%d), cache reads %d ms, other client work %d ms%n",
                         millis(mapRequestNanos), mapRequestCount, millis(mapCacheReadNanos), millis(mapClientNanos));
-                stop(game, "Runs: " + completedRuns + ", collections: " + collected + ".");
+                stop(game);
             }
             return;
         }
         Step step = ROUTE[stage];
-        if (!step.map.equals(map.nameId)) { stop(game, "Left the route."); return; }
-        if (waiting && now - waitingSince > 15000) { stop(game, "Action timed out."); return; }
+        if (!step.map.equals(map.nameId)) { stop(game); return; }
+        if (waiting && now - waitingSince > 15000) { stop(game); return; }
         if (waiting || MenuManager.instance.guiHandler.isActive() || Com.dontFightAndAction || Com.mainTh.stopPaint) return;
         int townIndex = findTown(map, step);
-        if (townIndex < 0) { stop(game, "Route object missing: " + step.key); return; }
+        if (townIndex < 0) { stop(game); return; }
         Town town = map.towns[townIndex];
         QuestSingle quest = null;
         if (stage == 6) {
@@ -204,12 +203,12 @@ public final class AutoJuice extends ClickGui.Feature {
         if (stage == 6) {
             try {
                 if (!GatherCollector.rewardConfirmed(GatherCollector.collect(map, town.typeInd, quest))) {
-                    stop(game, "Sap reward was not confirmed.");
+                    stop(game);
                     return;
                 }
                 collected++;
                 waiting = false;
-            } catch (Exception exception) { stop(game, exception.getMessage()); }
+            } catch (Exception exception) { stop(game); }
             return;
         }
         if (step.type == 405) {
@@ -218,7 +217,7 @@ public final class AutoJuice extends ClickGui.Feature {
             String[] portals = new String[end - stage];
             for (int i = stage; i < end; i++) {
                 int index = findTown(map, ROUTE[i]);
-                if (index < 0) { stop(game, "Route object missing: " + ROUTE[i].key); return; }
+                if (index < 0) { stop(game); return; }
                 portals[i - stage] = map.towns[index].GPFile;
             }
             try {
@@ -226,10 +225,10 @@ public final class AutoJuice extends ClickGui.Feature {
                 Step destination = ROUTE[end - 1];
                 if (Com.currentGameMap != map || player.curMapInd != map.serverIndex
                         || player.cx != destination.x || player.cy != destination.y) {
-                    stop(game, "Jump sequence was not confirmed."); return;
+                    stop(game); return;
                 }
                 stage = end; waiting = false;
-            } catch (Exception exception) { stop(game, exception.getMessage()); }
+            } catch (Exception exception) { stop(game); }
         } else GameMapObjectsController.instance.analisMapObject(townIndex, step.type != 409);
     }
 
