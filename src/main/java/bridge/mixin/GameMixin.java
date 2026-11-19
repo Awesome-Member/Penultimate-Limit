@@ -37,10 +37,7 @@ import battlepck.client.BattleTh;
 import bridge.other.ObjectInteract;
 import bridge.other.AutoCollect;
 import bridge.other.AutoDungeon;
-import bridge.other.AutoJuice;
-import bridge.other.AutoGatherRoute;
-import Moduls.quests.QuestStrateg;
-import Moduls.quests.QuestsOnMap;
+import bridge.other.AutoGather;
 import bridge.other.MobGather;
 import Base.GameControllDirectData;
 import Base.GameMapObjectsController;
@@ -77,9 +74,8 @@ public abstract class GameMixin {
         if (component.id != 10017) return;
         Game game = (Game)(Object)this;
         if (QuestFollower.INSTANCE.enabled) QuestFollower.INSTANCE.stop(game);
-        if (AutoJuice.INSTANCE.enabled) AutoJuice.INSTANCE.stop(game);
-        for (AutoGatherRoute route : AutoGatherRoute.routes()) {
-            if (route.enabled) route.stop(game);
+        for (AutoGather gather : AutoGather.routes()) {
+            if (gather.enabled) gather.stop(game);
         }
     }
 
@@ -87,7 +83,7 @@ public abstract class GameMixin {
             at = @At(value = "INVOKE", target = "LBase/GameCommons;paintInScreenCoord(Ldesktop/graphics/GameGraphics;LEngine/Camera;LModuls/TileMap;)V"),
             remap = false, require = 1)
     private void entropy$prepareJuiceMapForPaint(GameGraphics graphics, boolean justPaint, CallbackInfo callback) {
-        AutoJuice.INSTANCE.prepareMapForPaint();
+        AutoGather.prepareMapForPaint();
     }
 
     @Inject(method = "paint(Ldesktop/graphics/GameGraphics;Z)V",
@@ -124,7 +120,7 @@ public abstract class GameMixin {
             at = @At(value = "INVOKE", target = "LBase/Com;startGameMap(Z)V"),
             remap = false, require = 1)
     private void entropy$measureJuiceMapLoad(boolean justLoading) {
-        AutoJuice.INSTANCE.loadMap(justLoading);
+        AutoGather.loadMapFor(justLoading);
     }
 
     @Inject(method = "functionate()V", at = @At("HEAD"), remap = false, require = 1)
@@ -144,8 +140,7 @@ public abstract class GameMixin {
         Reach.INSTANCE.update((Game)(Object)this);
         ObjectInteract.INSTANCE.update((Game)(Object)this);
         AutoCollect.INSTANCE.update((Game)(Object)this);
-        AutoJuice.INSTANCE.update((Game)(Object)this);
-        for (AutoGatherRoute route : AutoGatherRoute.routes()) route.update((Game)(Object)this);
+        for (AutoGather gather : AutoGather.routes()) gather.update((Game)(Object)this);
         HideStatues.INSTANCE.update();
     }
 }
@@ -161,12 +156,11 @@ abstract class JuiceMapBufferMixin {
             at = @At(value = "INVOKE", target = "LBase/Com;smallReqWithMap(IIZ)LBase/NetRequest;"),
             remap = false, require = 4)
     private static NetRequest entropy$measureMapRequest(int id, int part, boolean saveBytes) {
-        AutoJuice juice = AutoJuice.INSTANCE;
-        long started = juice.beginMapRequestTiming();
+        long started = AutoGather.beginRequestTiming();
         try {
             return smallReqWithMap(id, part, saveBytes);
         } finally {
-            juice.endMapRequestTiming(started);
+            AutoGather.endRequestTiming(started);
         }
     }
 
@@ -174,14 +168,14 @@ abstract class JuiceMapBufferMixin {
             at = @At(value = "INVOKE", target = "LBase/Black;readMapCacheRecord(Ljava/lang/String;I)[B"),
             remap = false, require = 6)
     private static byte[] entropy$reuseMapCacheRecord(String store, int index) {
-        return AutoJuice.INSTANCE.readMapRecord(store, index);
+        return AutoGather.cachedMapRecord(store, index);
     }
 
     @Redirect(method = "startGameMap(Z)V",
             at = @At(value = "INVOKE", target = "LModuls/MapBuffer;TryRedraw(LEngine/Camera;LModuls/TileMap;[LModuls/Tile;)V"),
             remap = false, require = 1)
     private static void entropy$deferJuiceMapBuffer(MapBuffer buffer, Camera camera, TileMap map, Tile[] tiles) {
-        AutoJuice.INSTANCE.prepareMapBuffer(buffer, camera, map, tiles);
+        AutoGather.prepareMapBuffer(buffer, camera, map, tiles);
     }
 }
 
@@ -208,19 +202,13 @@ abstract class ObjectApproachMixin {
 
 @Mixin(value = MenuList.class, remap = false)
 abstract class QuestPortalMixin {
-    @Shadow protected int curMenuId;
-
-    @Inject(method = "functionate()V", at = @At("HEAD"), remap = false, require = 1)
-    private void entropy$observeGatherMenu(CallbackInfo callback) {
-        for (AutoGatherRoute route : AutoGatherRoute.routes()) route.observeMenu((MenuList)(Object)this, curMenuId);
-    }
     @Inject(method = "showConfirmationForMenu(ILjava/lang/String;)V", at = @At("HEAD"),
             cancellable = true, remap = false, require = 1)
     private void entropy$confirmQuestPortal(int menuId, String text, CallbackInfo callback) {
         if (menuId != 186 && menuId != 187) return;
         int townIndex = MenuSupport.instance.curActiveTownInd;
         if (!QuestFollower.INSTANCE.shouldConfirmPortal(townIndex, menuId)
-                && !AutoJuice.INSTANCE.shouldConfirmPortal(townIndex, menuId)) return;
+                && !AutoGather.anyShouldConfirmPortal(townIndex, menuId)) return;
         callback.cancel();
         if (menuId == 186) GameMapObjectsController.actionMapObjectMapPortalUse(townIndex);
         else GameMapObjectsController.actionMapObjectDirectPortalUse(townIndex);
@@ -231,36 +219,22 @@ abstract class QuestPortalMixin {
 abstract class JuicePortalMixin {
     @Inject(method = "actionMapObjectDirectPortalUse(I)V", at = @At("HEAD"), remap = false, require = 1)
     private static void entropy$beforeJuiceJump(int townIndex, CallbackInfo callback) {
-        AutoJuice.INSTANCE.beforePortal(townIndex);
-        for (AutoGatherRoute route : AutoGatherRoute.routes()) route.beforePortal(townIndex);
+        for (AutoGather gather : AutoGather.routes()) gather.beforePortal(townIndex);
     }
 
     @Inject(method = "actionMapObjectDirectPortalUse(I)V", at = @At("RETURN"), remap = false, require = 1)
     private static void entropy$afterJuiceJump(int townIndex, CallbackInfo callback) {
-        AutoJuice.INSTANCE.afterPortal();
-        for (AutoGatherRoute route : AutoGatherRoute.routes()) route.afterPortal();
+        for (AutoGather gather : AutoGather.routes()) gather.afterPortal();
     }
 
     @Inject(method = "actionMapObjectMapPortalUse(I)Z", at = @At("HEAD"), remap = false, require = 1)
     private static void entropy$beforeJuicePortal(int townIndex, CallbackInfoReturnable<Boolean> callback) {
-        AutoJuice.INSTANCE.beforePortal(townIndex);
-        for (AutoGatherRoute route : AutoGatherRoute.routes()) route.beforePortal(townIndex);
+        for (AutoGather gather : AutoGather.routes()) gather.beforePortal(townIndex);
     }
 
     @Inject(method = "actionMapObjectMapPortalUse(I)Z", at = @At("RETURN"), remap = false, require = 1)
     private static void entropy$afterJuicePortal(int townIndex, CallbackInfoReturnable<Boolean> callback) {
-        AutoJuice.INSTANCE.afterPortal();
-        for (AutoGatherRoute route : AutoGatherRoute.routes()) route.afterPortal();
-    }
-}
-
-@Mixin(value = QuestStrateg.class, remap = false)
-abstract class JuiceRewardMixin {
-    @Inject(method = "checkGetnQuestsForDone(LModuls/TileMap;ILModuls/quests/QuestsOnMap;LModuls/Strategist;Z)[Ljava/lang/String;",
-            at = @At("RETURN"), remap = false, require = 1)
-    private void entropy$juiceReward(TileMap map, int giver, QuestsOnMap quests, Moduls.Strategist player,
-            boolean analyzeLast, CallbackInfoReturnable<String[]> callback) {
-        for (AutoGatherRoute route : AutoGatherRoute.routes()) route.onReward(map, giver, callback.getReturnValue());
+        for (AutoGather gather : AutoGather.routes()) gather.afterPortal();
     }
 }
 
