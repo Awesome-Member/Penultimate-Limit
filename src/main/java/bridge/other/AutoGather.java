@@ -239,6 +239,11 @@ public abstract class AutoGather extends ClickGui.Feature {
     private void updateStep(Game game) {
         GameControllDirectData controls = game.gameControllDirectData;
         if (!enabled) { stage = -1; return; }
+        if (!GatherCollector.connectionUsable()) {
+            System.out.println("[" + title + "] stopped: server connection broken, relogin required");
+            stop(game);
+            return;
+        }
         TileMap map = Com.currentGameMap;
         Strategist player = Strategist.instance;
         if (Com.mainTh == null || Com.mainTh.getPFter1() != game || map == null || map.towns == null || GameCommons.instance.loadMap || map.serverIndex != player.curMapInd) return;

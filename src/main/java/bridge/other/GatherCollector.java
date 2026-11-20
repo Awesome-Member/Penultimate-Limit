@@ -20,6 +20,18 @@ final class GatherCollector {
     private static final Field NET_INPUT = gameField(Com.class, "net_pdis");
     private static final Field NET_OUTPUT = gameField(Com.class, "net_os");
     private static final Field QUESTER_QUESTS = gameField(Moduls.quests.QuestsOnMap.class, "quests");
+    static volatile boolean connectionBroken;
+    private static Object brokenInput;
+
+    static boolean connectionUsable() {
+        if (!connectionBroken) return true;
+        try {
+            if (brokenInput != null && brokenInput != NET_INPUT.get(null)) connectionBroken = false;
+        } catch (IllegalAccessException exception) {
+            return false;
+        }
+        return !connectionBroken;
+    }
 
     private static Field gameField(Class<?> type, String name) {
         try {
@@ -121,7 +133,7 @@ final class GatherCollector {
         for (NetRequest request : backRequests) { all.add(request); ids.add(4140520); }
         all.add(exitAnalyze); ids.add(4140410);
         all.add(exitUse); ids.add(4140420);
-        sendBatch(all.toArray(new NetRequest[0]));
+        sendBatch(ids, all.toArray(new NetRequest[0]));
         int[] codes = new int[all.size()];
         for (int i = 0; i < all.size(); i++) {
             all.get(i).response.mark(4);
@@ -225,6 +237,10 @@ final class GatherCollector {
     }
 
     private static void sendBatch(NetRequest... requests) throws IOException {
+        sendBatch(null, requests);
+    }
+
+    private static void sendBatch(List<Integer> ids, NetRequest... requests) throws IOException {
         ByteArrayOutputStream buffer = new ByteArrayOutputStream();
         for (NetRequest request : requests) buffer.write(frame(request));
         byte[] data = buffer.toByteArray();
@@ -232,13 +248,19 @@ final class GatherCollector {
             synchronized (SEND_LOCK.get(null)) {
                 InputStream input = (InputStream)NET_INPUT.get(null);
                 OutputStream output = (OutputStream)NET_OUTPUT.get(null);
-                if (input == null || output == null) throw new IOException("Server connection unavailable");
+                if (input == null || output == null) { connectionBroken = true; throw new IOException("Server connection unavailable"); }
                 Com.isActiveRequest = true; Com.lastSendRequestTime = System.currentTimeMillis();
                 try {
                     Com.sentBytes += data.length;
                     output.write(data); output.flush();
-
-                    for (NetRequest request : requests) readReply(input, request);
+                    int done = 0;
+                    try {
+                        for (NetRequest request : requests) { readReply(input, request); done++; }
+                    } catch (IOException exception) {
+                        connectionBroken = true; brokenInput = input;
+                        throw new IOException("connection lost after " + done + "/" + requests.length
+                                + (ids == null ? "" : " replies, stalled on " + ids.get(done)) + ": " + exception);
+                    }
                 } finally {
                     Com.isActiveRequest = false; Com.lastSendRequestTime = System.currentTimeMillis();
                 }
@@ -247,7 +269,7 @@ final class GatherCollector {
     }
 
     private static void readReply(InputStream input, NetRequest request) throws IOException {
-        long deadline = System.currentTimeMillis() + 10000;
+        long deadline = System.currentTimeMillis() + 5000;
         int length = 0;
         for (int i = 0; i < 4; i++) length |= ((readByte(input, deadline) + 128) & 255) << (8 * i);
         if (length <= 0 || length > 2097152) throw new IOException("Invalid response length: " + length);
