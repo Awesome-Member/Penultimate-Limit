@@ -133,7 +133,8 @@ final class GatherCollector {
         for (NetRequest request : backRequests) { all.add(request); ids.add(4140520); }
         all.add(exitAnalyze); ids.add(4140410);
         all.add(exitUse); ids.add(4140420);
-        sendBatch(ids, all.toArray(new NetRequest[0]));
+        sendBatch(ids.subList(0, ids.size() - 2), all.subList(0, all.size() - 2).toArray(new NetRequest[0]));
+        sendBatch(ids.subList(ids.size() - 2, ids.size()), exitAnalyze, exitUse);
         int[] codes = new int[all.size()];
         for (int i = 0; i < all.size(); i++) {
             all.get(i).response.mark(4);
