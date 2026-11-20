@@ -123,9 +123,12 @@ public final class ClickGui extends JComponent {
         final String name, description;
         final List<Setting> settings = new ArrayList<>();
         public volatile boolean enabled;
+        java.util.function.Supplier<String> status;
         public final Category category;
         boolean open; float animation;
         Runnable onToggle = () -> {};
+        public boolean liveStatus() { return false; }
+        protected final void statusText(java.util.function.Supplier<String> status) { this.status = status; }
         void refreshSettings() {
             for(Setting setting:settings)if(setting instanceof TextSetting) {
                 TextSetting text=(TextSetting)setting;
@@ -283,6 +286,7 @@ public final class ClickGui extends JComponent {
                 old=f.animation;f.animation=clamp(old+(f.enabled?.15f:-.08f),0,1);changed|=old!=f.animation;
             }
         }
+        for(Tab tab:tabs)for(Feature f:tab.features)if(f.liveStatus())changed=true;
         repaint();if(!changed)motion.stop();
     }
     private static float clamp(float value,float min,float max) {return Math.max(min,Math.min(max,value));}
@@ -324,8 +328,10 @@ public final class ClickGui extends JComponent {
             round(107,cardY,377,cardY+15,0xff1a1a1a,4);
             if(feature.open && !feature.settings.isEmpty())rect(107,cardY+11,377,cardY+15,0xff1a1a1a);
             text(110,cardY+3,feature.name,mix(0xffffffff,BLUE,feature.animation));
-            int descWidth=measure(feature.description,7.5f);
-            text(168+(182-descWidth)/2,cardY+3,feature.description,0xffaaaaaa);
+            String cardInfo=feature.status!=null?feature.status.get():null;
+            if(cardInfo==null)cardInfo=feature.description;
+            int descWidth=measure(cardInfo,7.5f);
+            text(168+(182-descWidth)/2,cardY+3,cardInfo,0xffaaaaaa);
             round(355,cardY+2,375,cardY+12,mix(0xff333333,BLUE,feature.animation),5);
             int knob=356+(int)(10*feature.animation);
             round(knob,cardY+3,knob+8,cardY+11,0xffffffff,4);

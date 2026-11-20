@@ -45,18 +45,24 @@ public abstract class AutoGather extends ClickGui.Feature {
     private final Step[] route;
     private final int collectStage;
 
-    private int stage = -1, portalStage = -1;
+    private volatile int stage = -1;
+    private int portalStage = -1;
     private volatile int iterations = 1;
-    private int iterationLimit, collected, completedRuns;
+    private int collected;
+    private volatile int iterationLimit, completedRuns;
     private int portalMap;
     private boolean waiting;
     private long waitingSince;
     private long startedAt;
     private final long[] stepNanos;
-    private long forestLoadNanos, outsideLoadNanos;
+    private long insideLoadNanos, outsideLoadNanos;
     private long mapRequestNanos, mapCacheReadNanos;
     private int mapRequestCount;
-    private boolean forestBufferPending;
+    private boolean insideBufferPending;
+    private final List<QuestSingle> learnedQuests = new ArrayList<QuestSingle>();
+    private long batchNanos;
+    private int batchRuns;
+    private boolean batchPulse;
     private final ThreadLocal<MapLoad> activeMapLoad = new ThreadLocal<>();
 
     AutoGather(String title, String description, String outside, String inside, String questName, Step[] route, int collectStage) {
@@ -77,6 +83,12 @@ public abstract class AutoGather extends ClickGui.Feature {
                     } catch (NumberFormatException exception) { return false; }
                 });
         onToggle(() -> { stage = -1; });
+        statusText(() -> stage >= 0 ? completedRuns + "/" + iterationLimit : null);
+    }
+
+    @Override
+    public boolean liveStatus() {
+        return stage >= 0;
     }
 
     public void stop(Game game) {
@@ -119,16 +131,16 @@ public abstract class AutoGather extends ClickGui.Feature {
     public static void prepareMapBuffer(MapBuffer buffer, Camera camera, TileMap map, Tile[] tiles) {
         boolean pending = false;
         for (AutoGather gather : routes()) {
-            gather.forestBufferPending = gather.enabled && gather.stage == 1 && gather.inside.equals(map.nameId);
-            if (gather.forestBufferPending) pending = true;
+            gather.insideBufferPending = gather.enabled && gather.stage == 1 && gather.inside.equals(map.nameId);
+            if (gather.insideBufferPending) pending = true;
         }
         if (!pending) buffer.TryRedraw(camera, map, tiles);
     }
 
     public static void prepareMapForPaint() {
         for (AutoGather gather : routes()) {
-            if (!gather.forestBufferPending) continue;
-            gather.forestBufferPending = false;
+            if (!gather.insideBufferPending) continue;
+            gather.insideBufferPending = false;
             TileMap map = Com.currentGameMap;
             if (map != null && gather.inside.equals(map.nameId)) {
                 Com.MB.TryRedraw(Com.cameraWorld, map, Com.Tiles);
@@ -174,7 +186,7 @@ public abstract class AutoGather extends ClickGui.Feature {
         } finally {
             activeMapLoad.remove();
             long elapsed = System.nanoTime() - start;
-            if (loadStage == 1) forestLoadNanos += elapsed;
+            if (loadStage == 1) insideLoadNanos += elapsed;
             else outsideLoadNanos += elapsed;
             mapRequestNanos += load.requestNanos;
             mapCacheReadNanos += load.cacheReadNanos;
@@ -215,6 +227,7 @@ public abstract class AutoGather extends ClickGui.Feature {
             long start = enabled ? System.nanoTime() : 0;
             if (enabled && previousStage < 0) startedAt = start;
             updateStep(game);
+            if (batchPulse) { batchPulse = false; return; }
             if (enabled && previousStage < route.length) {
                 stepNanos[Math.max(0, previousStage)] += System.nanoTime() - start;
             }
@@ -237,10 +250,11 @@ public abstract class AutoGather extends ClickGui.Feature {
             stage = 0; waiting = false;
             iterationLimit = iterations; collected = 0; completedRuns = 0;
             Arrays.fill(stepNanos, 0);
-            forestLoadNanos = outsideLoadNanos = 0;
+            insideLoadNanos = outsideLoadNanos = 0;
             mapRequestNanos = mapCacheReadNanos = 0;
             mapRequestCount = 0;
             portalStage = -1;
+            batchNanos = 0; batchRuns = 0;
         }
         if (stage == route.length) {
             if (!outside.equals(map.nameId)) { stop(game); return; }
@@ -254,7 +268,7 @@ public abstract class AutoGather extends ClickGui.Feature {
                 System.out.printf("[%s] %d ms (entry %d, jumps %d, gather %d, exit %d, outside load %d)%n",
                         title, total, millis(stepNanos[0]), millis(jumpsNanos), millis(stepNanos[collectStage]),
                         millis(stepNanos[route.length - 1]), millis(outsideLoadNanos));
-                long mapClientNanos = forestLoadNanos + outsideLoadNanos - mapRequestNanos - mapCacheReadNanos;
+                long mapClientNanos = insideLoadNanos + outsideLoadNanos - mapRequestNanos - mapCacheReadNanos;
                 System.out.printf("[%s] Map loads: requests %d ms (%d), cache reads %d ms, other client work %d ms%n",
                         title, millis(mapRequestNanos), mapRequestCount, millis(mapCacheReadNanos), millis(mapClientNanos));
                 stop(game);
@@ -265,6 +279,28 @@ public abstract class AutoGather extends ClickGui.Feature {
         if (!step.map.equals(map.nameId)) { stop(game); return; }
         if (waiting && now - waitingSince > 15000) { stop(game); return; }
         if (waiting || MenuManager.instance.guiHandler.isActive() || Com.dontFightAndAction || Com.mainTh.stopPaint) return;
+        if (stage == 0 && !learnedQuests.isEmpty()) {
+            controls.disableControll(); game.gameControllAnalogData.disableControll();
+            long start = System.nanoTime();
+            int done;
+            try {
+                done = GatherCollector.batchRun(route[0].key, jumpKeys(1, collectStage),
+                        jumpKeys(collectStage + 1, route.length - 1), route[route.length - 1].key, learnedQuests);
+            } catch (Exception exception) {
+                System.out.println("[" + title + "] batch failed: " + exception);
+                learnedQuests.clear(); stop(game); return;
+            } finally {
+                batchNanos += System.nanoTime() - start;
+            }
+            if (done <= 0) { learnedQuests.clear(); stop(game); return; }
+            batchRuns++; collected += done; completedRuns++;
+            Com.GameTh.myPathReset();
+            if (completedRuns < iterationLimit) { batchPulse = true; return; }
+            System.out.printf("[%s] %d runs, %d attempts in %d ms (batch avg %d ms)%n", title, iterationLimit,
+                    collected, millis(System.nanoTime() - startedAt), millis(batchNanos / Math.max(1, batchRuns)));
+            stop(game);
+            return;
+        }
         int townIndex = findTown(map, step);
         if (townIndex < 0) { stop(game); return; }
         Town town = map.towns[townIndex];
@@ -286,6 +322,8 @@ public abstract class AutoGather extends ClickGui.Feature {
                     stop(game);
                     return;
                 }
+                if (route[0].type == 404 && route[route.length - 1].type == 404 && learnedQuests.isEmpty())
+                    learnedQuests.addAll(GatherCollector.questChain(map, town.typeInd, quest.name));
                 collected++;
                 waiting = false;
             } catch (Exception exception) { stop(game); }
@@ -314,6 +352,12 @@ public abstract class AutoGather extends ClickGui.Feature {
 
     private static long millis(long nanos) {
         return TimeUnit.NANOSECONDS.toMillis(nanos);
+    }
+
+    private String[] jumpKeys(int from, int to) {
+        String[] keys = new String[Math.max(0, to - from)];
+        for (int i = from; i < to; i++) keys[i - from] = route[i].key;
+        return keys;
     }
 
     private static int findTown(TileMap map, Step step) {

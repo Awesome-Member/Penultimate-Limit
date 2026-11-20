@@ -11,11 +11,20 @@ import Moduls.quests.QuestSingleIdSmall;
 import Moduls.quests.QuestStrateg;
 import java.io.*;
 import java.lang.reflect.Field;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Vector;
 
 final class GatherCollector {
-    private static final class JuiceConnection {
-        static final Field LOCK = networkField("sendLock"), INPUT = networkField("net_pdis"), OUTPUT = networkField("net_os");
+    private static final Field SEND_LOCK = gameField(Com.class, "sendLock");
+    private static final Field NET_INPUT = gameField(Com.class, "net_pdis");
+    private static final Field NET_OUTPUT = gameField(Com.class, "net_os");
+    private static final Field QUESTER_QUESTS = gameField(Moduls.quests.QuestsOnMap.class, "quests");
+
+    private static Field gameField(Class<?> type, String name) {
+        try {
+            Field field = type.getDeclaredField(name); field.setAccessible(true); return field;
+        } catch (ReflectiveOperationException exception) { throw new ExceptionInInitializerError(exception); }
     }
 
     private GatherCollector() { }
@@ -35,6 +44,16 @@ final class GatherCollector {
         return -1;
     }
 
+    static List<QuestSingle> questChain(TileMap map, int giver, String questName) {
+        List<QuestSingle> chain = new ArrayList<QuestSingle>();
+        if (map.questers == null || giver < 0 || giver >= map.questers.length || map.questers[giver] == null) return chain;
+        try {
+            QuestSingle[] quests = (QuestSingle[])QUESTER_QUESTS.get(map.questers[giver]);
+            if (quests != null) for (QuestSingle quest : quests) if (questName.equals(quest.name)) chain.add(quest);
+        } catch (IllegalAccessException ignored) { }
+        return chain;
+    }
+
     static boolean rewardConfirmed(String[] result) {
         if (result == null || result.length == 0) return false;
         return "SUCCESS".equals(result[0]) || "SUCCESS_FLOAT".equals(result[0]) || "SUCCESS_SILENT".equals(result[0]);
@@ -42,23 +61,10 @@ final class GatherCollector {
 
     public static void jump(String[] portals) throws IOException {
         NetRequest[] requests = new NetRequest[portals.length];
-        for (int i = 0; i < portals.length; i++) {
-            requests[i] = new NetRequest();
-            requests[i].writeHeader(4140520);
-            requests[i].request.writeUTF(portals[i]);
-        }
+        for (int i = 0; i < portals.length; i++) requests[i] = objectRequest(4140520, portals[i]);
         sendBatch(requests);
-        int rejected = 0;
-        for (NetRequest request : requests) {
-            int response = request.response.readInt();
-            if (response != 4140521) { rejected = response; continue; }
-            Strategist.instance.cx = (short)request.response.readInt();
-            Strategist.instance.cy = (short)request.response.readInt();
-            request.response.readBoolean();
-            IndirectNetworkHandler.instance.loadFromStreamAndApply(request.response);
-        }
+        for (NetRequest request : requests) applyJumpReply(request);
         Com.cameraWorld.resetSmooth();
-        if (rejected != 0) throw new IOException("Server rejected the jump: " + rejected);
     }
 
     public static String[] collect(TileMap map, int giver, QuestSingle quest) throws IOException {
@@ -68,41 +74,147 @@ final class GatherCollector {
         NetRequest reward = new NetRequest();
         reward.writeHeader(4141020);
         quest.saveToStreamId(reward.request);
-        sendTogether(request, reward);
-        int response = request.response.readInt();
-        if (response == 4140923) throw new IOException("Free inventory slots required: " + request.response.readInt());
-        if (response != 4140921) throw new IOException("Server rejected the attempt: " + response);
-        QuestInPlayer accepted = new QuestInPlayer(request.response);
-        if (request.response.readBoolean()) {
-            request.response.readUTF();
-            Com.applyRewardEvents(request);
-        }
-        QuestStrateg quests = QuestStrateg.instance;
-        quests.quests.addElement(accepted);
+        sendBatch(request, reward);
+        QuestInPlayer accepted = parseTakeReply(request);
         boolean refreshed = false;
         try {
-            if (accepted.questSingle.switchCompass) quests.changeCompassedQuest(accepted);
-            int result = reward.response.readInt();
-            if (result != 4141021) throw new IOException("Server did not confirm the reward: " + result);
-            String text = reward.response.readUTF();
-            Com.applyRewardEvents(reward);
-            quests.questsDone.put(quest.createStringIdSmall(), new QuestSingleIdSmall(
-                    quest.inMap, quest.inMapQuesterInd, quest.inQuesterInd));
-            int index = quests.quests.indexOf(accepted);
-            if (index >= 0) {
-                QuestStrateg.removeQuest(index, true);
-                refreshed = true;
-            }
+            String text = parseRewardReply(reward, quest, accepted);
+            refreshed = true;
             return new String[]{"SUCCESS_SILENT", text, "0"};
         } finally {
             if (!refreshed) Com.onQuestsChanged(true);
         }
     }
 
-    private static Field networkField(String name) {
+    public static int batchRun(String entryKey, String[] forward, String[] back, String exitKey, List<QuestSingle> quests) throws IOException {
+        int attempts = quests.size();
+        NetRequest entryAnalyze = objectRequest(4140410, entryKey);
+        NetRequest entryUse = objectRequest(4140420, entryKey);
+        NetRequest exitAnalyze = objectRequest(4140410, exitKey);
+        NetRequest exitUse = objectRequest(4140420, exitKey);
+        List<NetRequest> takes = new ArrayList<NetRequest>();
+        List<NetRequest> rewards = new ArrayList<NetRequest>();
+        for (int attempt = 0; attempt < attempts; attempt++) {
+            QuestSingle quest = quests.get(attempt);
+            NetRequest take = new NetRequest();
+            take.writeHeader(4140920);
+            quest.saveToStreamId(take.request);
+            NetRequest reward = new NetRequest();
+            reward.writeHeader(4141020);
+            quest.saveToStreamId(reward.request);
+            takes.add(take);
+            rewards.add(reward);
+        }
+        List<NetRequest> forwardRequests = new ArrayList<NetRequest>();
+        for (String key : forward) forwardRequests.add(objectRequest(4140520, key));
+        List<NetRequest> backRequests = new ArrayList<NetRequest>();
+        for (String key : back) backRequests.add(objectRequest(4140520, key));
+        List<NetRequest> all = new ArrayList<NetRequest>();
+        List<Integer> ids = new ArrayList<Integer>();
+        all.add(entryAnalyze); ids.add(4140410);
+        all.add(entryUse); ids.add(4140420);
+        for (NetRequest request : forwardRequests) { all.add(request); ids.add(4140520); }
+        for (int attempt = 0; attempt < attempts; attempt++) {
+            all.add(takes.get(attempt)); ids.add(4140920);
+            all.add(rewards.get(attempt)); ids.add(4141020);
+        }
+        for (NetRequest request : backRequests) { all.add(request); ids.add(4140520); }
+        all.add(exitAnalyze); ids.add(4140410);
+        all.add(exitUse); ids.add(4140420);
+        sendBatch(all.toArray(new NetRequest[0]));
+        int[] codes = new int[all.size()];
+        for (int i = 0; i < all.size(); i++) {
+            all.get(i).response.mark(4);
+            codes[i] = all.get(i).response.readInt();
+            all.get(i).response.reset();
+        }
         try {
-            Field field = Com.class.getDeclaredField(name); field.setAccessible(true); return field;
-        } catch (ReflectiveOperationException exception) { throw new ExceptionInInitializerError(exception); }
+            applyGateReply(entryAnalyze);
+            applyPortalReply(entryUse);
+            for (NetRequest request : forwardRequests) applyJumpReply(request);
+            int done = 0;
+            for (int attempt = 0; attempt < attempts; attempt++) {
+                NetRequest take = takes.get(attempt);
+                int response = take.response.readInt();
+                if (response == 4140923) throw new IOException("Free inventory slots required: " + take.response.readInt());
+                if (response != 4140921) {
+                    if (attempt > 0 && response != 4140922)
+                        System.out.printf("attempt %d/%d rejected: %d%n", attempt + 1, attempts, response);
+                    break;
+                }
+                QuestInPlayer accepted = parseTakeBody(take);
+                parseRewardReply(rewards.get(attempt), quests.get(attempt), accepted);
+                done++;
+            }
+            for (NetRequest request : backRequests) applyJumpReply(request);
+            applyGateReply(exitAnalyze);
+            applyPortalReply(exitUse);
+            Com.cameraWorld.resetSmooth();
+            return done;
+        } catch (IOException exception) {
+            StringBuilder dump = new StringBuilder("batch replies:");
+            for (int i = 0; i < all.size(); i++) dump.append(' ').append(ids.get(i)).append("->").append(codes[i]);
+            System.out.println(dump);
+            throw exception;
+        }
+    }
+
+    private static NetRequest objectRequest(int id, String key) throws IOException {
+        NetRequest request = new NetRequest();
+        request.writeHeader(id);
+        request.request.writeUTF(key);
+        return request;
+    }
+
+    private static void applyGateReply(NetRequest request) throws IOException {
+        int response = request.response.readInt();
+        if (response != 4140411) throw new IOException("Server rejected the gate: " + response);
+        request.response.readBoolean();
+    }
+
+    private static void applyPortalReply(NetRequest request) throws IOException {
+        int response = request.response.readInt();
+        if (response != 4140421) throw new IOException("Server rejected the portal: " + response);
+        IndirectNetworkHandler.instance.loadFromStreamAndApply(request.response);
+    }
+
+    private static void applyJumpReply(NetRequest request) throws IOException {
+        int response = request.response.readInt();
+        if (response != 4140521) throw new IOException("Server rejected the jump: " + response);
+        Strategist.instance.cx = (short)request.response.readInt();
+        Strategist.instance.cy = (short)request.response.readInt();
+        request.response.readBoolean();
+        IndirectNetworkHandler.instance.loadFromStreamAndApply(request.response);
+    }
+
+    private static QuestInPlayer parseTakeReply(NetRequest request) throws IOException {
+        int response = request.response.readInt();
+        if (response == 4140923) throw new IOException("Free inventory slots required: " + request.response.readInt());
+        if (response != 4140921) throw new IOException("Server rejected the attempt: " + response);
+        return parseTakeBody(request);
+    }
+
+    private static QuestInPlayer parseTakeBody(NetRequest request) throws IOException {
+        QuestInPlayer accepted = new QuestInPlayer(request.response);
+        if (request.response.readBoolean()) {
+            request.response.readUTF();
+            Com.applyRewardEvents(request);
+        }
+        QuestStrateg.instance.quests.addElement(accepted);
+        return accepted;
+    }
+
+    private static String parseRewardReply(NetRequest reward, QuestSingle quest, QuestInPlayer accepted) throws IOException {
+        int result = reward.response.readInt();
+        if (result != 4141021) throw new IOException("Server did not confirm the reward: " + result);
+        String text = reward.response.readUTF();
+        Com.applyRewardEvents(reward);
+        QuestStrateg quests = QuestStrateg.instance;
+        quests.questsDone.put(quest.createStringIdSmall(), new QuestSingleIdSmall(
+                quest.inMap, quest.inMapQuesterInd, quest.inQuesterInd));
+        int index = quests.quests.indexOf(accepted);
+        if (index >= 0) QuestStrateg.removeQuest(index, true);
+        return text;
     }
 
     private static byte[] frame(NetRequest request) {
@@ -112,23 +224,19 @@ final class GatherCollector {
         return bytes;
     }
 
-    private static void sendTogether(NetRequest first, NetRequest second) throws IOException {
-        sendBatch(first, second);
-    }
-
     private static void sendBatch(NetRequest... requests) throws IOException {
         ByteArrayOutputStream buffer = new ByteArrayOutputStream();
         for (NetRequest request : requests) buffer.write(frame(request));
-        byte[] pair = buffer.toByteArray();
+        byte[] data = buffer.toByteArray();
         try {
-            synchronized (JuiceConnection.LOCK.get(null)) {
-                InputStream input = (InputStream)JuiceConnection.INPUT.get(null);
-                OutputStream output = (OutputStream)JuiceConnection.OUTPUT.get(null);
+            synchronized (SEND_LOCK.get(null)) {
+                InputStream input = (InputStream)NET_INPUT.get(null);
+                OutputStream output = (OutputStream)NET_OUTPUT.get(null);
                 if (input == null || output == null) throw new IOException("Server connection unavailable");
                 Com.isActiveRequest = true; Com.lastSendRequestTime = System.currentTimeMillis();
                 try {
-                    Com.sentBytes += pair.length;
-                    output.write(pair); output.flush();
+                    Com.sentBytes += data.length;
+                    output.write(data); output.flush();
 
                     for (NetRequest request : requests) readReply(input, request);
                 } finally {

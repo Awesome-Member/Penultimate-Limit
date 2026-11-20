@@ -82,7 +82,7 @@ public abstract class GameMixin {
     @Inject(method = "paint(Ldesktop/graphics/GameGraphics;Z)V",
             at = @At(value = "INVOKE", target = "LBase/GameCommons;paintInScreenCoord(Ldesktop/graphics/GameGraphics;LEngine/Camera;LModuls/TileMap;)V"),
             remap = false, require = 1)
-    private void entropy$prepareJuiceMapForPaint(GameGraphics graphics, boolean justPaint, CallbackInfo callback) {
+    private void entropy$prepareGatherMapForPaint(GameGraphics graphics, boolean justPaint, CallbackInfo callback) {
         AutoGather.prepareMapForPaint();
     }
 
@@ -119,7 +119,7 @@ public abstract class GameMixin {
     @Redirect(method = "functionate()V",
             at = @At(value = "INVOKE", target = "LBase/Com;startGameMap(Z)V"),
             remap = false, require = 1)
-    private void entropy$measureJuiceMapLoad(boolean justLoading) {
+    private void entropy$measureGatherMapLoad(boolean justLoading) {
         AutoGather.loadMapFor(justLoading);
     }
 
@@ -146,7 +146,7 @@ public abstract class GameMixin {
 }
 
 @Mixin(value = Com.class, remap = false)
-abstract class JuiceMapBufferMixin {
+abstract class GatherMapBufferMixin {
     @Shadow
     private static NetRequest smallReqWithMap(int id, int part, boolean saveBytes) {
         throw new AssertionError();
@@ -174,7 +174,7 @@ abstract class JuiceMapBufferMixin {
     @Redirect(method = "startGameMap(Z)V",
             at = @At(value = "INVOKE", target = "LModuls/MapBuffer;TryRedraw(LEngine/Camera;LModuls/TileMap;[LModuls/Tile;)V"),
             remap = false, require = 1)
-    private static void entropy$deferJuiceMapBuffer(MapBuffer buffer, Camera camera, TileMap map, Tile[] tiles) {
+    private static void entropy$deferGatherMapBuffer(MapBuffer buffer, Camera camera, TileMap map, Tile[] tiles) {
         AutoGather.prepareMapBuffer(buffer, camera, map, tiles);
     }
 }
@@ -216,24 +216,24 @@ abstract class QuestPortalMixin {
 }
 
 @Mixin(value = GameMapObjectsController.class, remap = false)
-abstract class JuicePortalMixin {
+abstract class GatherPortalMixin {
     @Inject(method = "actionMapObjectDirectPortalUse(I)V", at = @At("HEAD"), remap = false, require = 1)
-    private static void entropy$beforeJuiceJump(int townIndex, CallbackInfo callback) {
+    private static void entropy$beforeGatherJump(int townIndex, CallbackInfo callback) {
         for (AutoGather gather : AutoGather.routes()) gather.beforePortal(townIndex);
     }
 
     @Inject(method = "actionMapObjectDirectPortalUse(I)V", at = @At("RETURN"), remap = false, require = 1)
-    private static void entropy$afterJuiceJump(int townIndex, CallbackInfo callback) {
+    private static void entropy$afterGatherJump(int townIndex, CallbackInfo callback) {
         for (AutoGather gather : AutoGather.routes()) gather.afterPortal();
     }
 
     @Inject(method = "actionMapObjectMapPortalUse(I)Z", at = @At("HEAD"), remap = false, require = 1)
-    private static void entropy$beforeJuicePortal(int townIndex, CallbackInfoReturnable<Boolean> callback) {
+    private static void entropy$beforeGatherPortal(int townIndex, CallbackInfoReturnable<Boolean> callback) {
         for (AutoGather gather : AutoGather.routes()) gather.beforePortal(townIndex);
     }
 
     @Inject(method = "actionMapObjectMapPortalUse(I)Z", at = @At("RETURN"), remap = false, require = 1)
-    private static void entropy$afterJuicePortal(int townIndex, CallbackInfoReturnable<Boolean> callback) {
+    private static void entropy$afterGatherPortal(int townIndex, CallbackInfoReturnable<Boolean> callback) {
         for (AutoGather gather : AutoGather.routes()) gather.afterPortal();
     }
 }
