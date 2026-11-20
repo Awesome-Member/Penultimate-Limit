@@ -247,18 +247,37 @@ final class GatherCollector {
     }
 
     private static void readReply(InputStream input, NetRequest request) throws IOException {
+        long deadline = System.currentTimeMillis() + 10000;
         int length = 0;
-        for (int i = 0; i < 4; i++) {
-            int value = input.read();
-            if (value < 0) throw new EOFException("Connection closed");
-            length |= ((value + 128) & 255) << (8 * i);
-        }
+        for (int i = 0; i < 4; i++) length |= ((readByte(input, deadline) + 128) & 255) << (8 * i);
         if (length <= 0 || length > 2097152) throw new IOException("Invalid response length: " + length);
         byte[] body = new byte[length];
-        new DataInputStream(input).readFully(body);
+        for (int offset = 0; offset < length; ) {
+            awaitInput(input, deadline);
+            int read = input.read(body, offset, length - offset);
+            if (read < 0) throw new EOFException("Connection closed");
+            offset += read;
+        }
         Com.getBytes += length + 4;
         request.responseBuffer = new ByteArrayInputStream(body);
         request.response = new DataInputStream(request.responseBuffer);
         request.success = true; request.responseReceived = true;
+    }
+
+    private static int readByte(InputStream input, long deadline) throws IOException {
+        awaitInput(input, deadline);
+        int value = input.read();
+        if (value < 0) throw new EOFException("Connection closed");
+        return value;
+    }
+
+    private static void awaitInput(InputStream input, long deadline) throws IOException {
+        while (input.available() == 0) {
+            if (System.currentTimeMillis() > deadline) throw new IOException("Reply timeout");
+            try { Thread.sleep(2); } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw new IOException("Interrupted while waiting for a reply", interrupted);
+            }
+        }
     }
 }
