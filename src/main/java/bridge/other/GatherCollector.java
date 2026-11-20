@@ -22,6 +22,7 @@ final class GatherCollector {
     private static final Field QUESTER_QUESTS = gameField(Moduls.quests.QuestsOnMap.class, "quests");
     static volatile boolean connectionBroken;
     private static Object brokenInput;
+    private static int pendingPongs;
 
     static boolean connectionUsable() {
         if (!connectionBroken) return true;
@@ -31,6 +32,15 @@ final class GatherCollector {
             return false;
         }
         return !connectionBroken;
+    }
+
+    private static void killConnection() {
+        try {
+            OutputStream output = (OutputStream)NET_OUTPUT.get(null);
+            if (output != null) try { output.close(); } catch (IOException ignored) { }
+            InputStream input = (InputStream)NET_INPUT.get(null);
+            if (input != null) try { input.close(); } catch (IOException ignored) { }
+        } catch (IllegalAccessException ignored) { }
     }
 
     private static Field gameField(Class<?> type, String name) {
@@ -74,9 +84,10 @@ final class GatherCollector {
     public static void jump(String[] portals) throws IOException {
         NetRequest[] requests = new NetRequest[portals.length];
         for (int i = 0; i < portals.length; i++) requests[i] = objectRequest(4140520, portals[i]);
-        sendBatch(requests);
-        for (NetRequest request : requests) applyJumpReply(request);
+        int replies = sendBatch(requests);
+        for (int i = 0; i < replies; i++) applyJumpReply(requests[i]);
         Com.cameraWorld.resetSmooth();
+        if (replies < requests.length) throw new IOException("jump interrupted after " + replies + "/" + requests.length);
     }
 
     public static String[] collect(TileMap map, int giver, QuestSingle quest) throws IOException {
@@ -86,8 +97,10 @@ final class GatherCollector {
         NetRequest reward = new NetRequest();
         reward.writeHeader(4141020);
         quest.saveToStreamId(reward.request);
-        sendBatch(request, reward);
+        int replies = sendBatch(request, reward);
+        if (replies < 1) throw new IOException("collect interrupted before take");
         QuestInPlayer accepted = parseTakeReply(request);
+        if (replies < 2) throw new IOException("collect interrupted before reward");
         boolean refreshed = false;
         try {
             String text = parseRewardReply(reward, quest, accepted);
@@ -133,43 +146,85 @@ final class GatherCollector {
         for (NetRequest request : backRequests) { all.add(request); ids.add(4140520); }
         all.add(exitAnalyze); ids.add(4140410);
         all.add(exitUse); ids.add(4140420);
-        sendBatch(ids.subList(0, ids.size() - 2), all.subList(0, all.size() - 2).toArray(new NetRequest[0]));
-        sendBatch(ids.subList(ids.size() - 2, ids.size()), exitAnalyze, exitUse);
-        int[] codes = new int[all.size()];
-        for (int i = 0; i < all.size(); i++) {
-            all.get(i).response.mark(4);
-            codes[i] = all.get(i).response.readInt();
-            all.get(i).response.reset();
-        }
+        int total = all.size();
+        int[] codes = new int[total];
+        int read = 0;
         try {
-            applyGateReply(entryAnalyze);
-            applyPortalReply(entryUse);
-            for (NetRequest request : forwardRequests) applyJumpReply(request);
+            read = sendAndCheck(all, ids, codes, 0, 2);
+            applyGateReply(all.get(0));
+            if (read < 2) throw interrupted(read, total);
+            applyPortalReply(all.get(1));
+            read = sendAndCheck(all, ids, codes, read, read + forwardRequests.size());
+            for (int i = 2; i < read; i++) applyJumpReply(all.get(i));
+            if (read < 2 + forwardRequests.size()) throw interrupted(read, total);
+            int questStart = read;
+            int questEnd = questStart + attempts * 2;
             int done = 0;
-            for (int attempt = 0; attempt < attempts; attempt++) {
-                NetRequest take = takes.get(attempt);
+            while (read < questEnd) {
+                int attempt = (read - questStart) / 2;
+                int pairFrom = read;
+                read = sendAndCheck(all, ids, codes, pairFrom, pairFrom + 2);
+                NetRequest take = all.get(pairFrom);
                 int response = take.response.readInt();
                 if (response == 4140923) throw new IOException("Free inventory slots required: " + take.response.readInt());
                 if (response != 4140921) {
-                    if (attempt > 0 && response != 4140922)
+                    if (response != 4140922)
                         System.out.printf("attempt %d/%d rejected: %d%n", attempt + 1, attempts, response);
-                    break;
+                    if (codes[pairFrom + 1] == 4141021 && read >= pairFrom + 2) {
+                        QuestInPlayer inWork = QuestStrateg.instance.findGetnQuest(quests.get(attempt));
+                        if (inWork != null) {
+                            parseRewardReply(all.get(pairFrom + 1), quests.get(attempt), inWork);
+                            done++;
+                        }
+                    }
+                    continue;
                 }
                 QuestInPlayer accepted = parseTakeBody(take);
-                parseRewardReply(rewards.get(attempt), quests.get(attempt), accepted);
+                if (read < pairFrom + 2) throw interrupted(read, total);
+                parseRewardReply(all.get(pairFrom + 1), quests.get(attempt), accepted);
                 done++;
             }
-            for (NetRequest request : backRequests) applyJumpReply(request);
-            applyGateReply(exitAnalyze);
-            applyPortalReply(exitUse);
+            if (done < attempts) {
+                StringBuilder takeCodes = new StringBuilder("take codes:");
+                for (int i = questStart; i < questEnd; i += 2) takeCodes.append(' ').append(codes[i]);
+                System.out.println(takeCodes);
+            }
+            read = sendAndCheck(all, ids, codes, read, read + backRequests.size());
+            for (int i = questEnd; i < read; i++) applyJumpReply(all.get(i));
+            if (read < questEnd + backRequests.size()) throw interrupted(read, total);
+            int exitFrom = read;
+            read = sendAndCheck(all, ids, codes, exitFrom, exitFrom + 2);
+            applyGateReply(all.get(exitFrom));
+            if (read < exitFrom + 2) throw interrupted(read, total);
+            applyPortalReply(all.get(exitFrom + 1));
             Com.cameraWorld.resetSmooth();
             return done;
         } catch (IOException exception) {
             StringBuilder dump = new StringBuilder("batch replies:");
-            for (int i = 0; i < all.size(); i++) dump.append(' ').append(ids.get(i)).append("->").append(codes[i]);
+            for (int i = 0; i < read; i++) dump.append(' ').append(ids.get(i)).append("->").append(codes[i]);
             System.out.println(dump);
             throw exception;
         }
+    }
+
+    private static int sendAndCheck(List<NetRequest> all, List<Integer> ids, int[] codes, int from, int to) throws IOException {
+        int replies = sendBatch(ids.subList(from, to), all.subList(from, to).toArray(new NetRequest[0]));
+        if (replies == 0) throw interrupted(from, all.size());
+        for (int i = from; i < from + replies; i++) {
+            all.get(i).response.mark(4);
+            codes[i] = all.get(i).response.readInt();
+            all.get(i).response.reset();
+            if (codes[i] == 1101119) {
+                connectionBroken = true;
+                killConnection();
+                throw new IOException("session invalid at reply " + (i + 1) + "/" + all.size() + " (" + codes[i] + "), relogin required");
+            }
+        }
+        return from + replies;
+    }
+
+    private static IOException interrupted(int index, int total) {
+        return new IOException("batch interrupted after reply " + index + "/" + total);
     }
 
     private static NetRequest objectRequest(int id, String key) throws IOException {
@@ -237,40 +292,90 @@ final class GatherCollector {
         return bytes;
     }
 
-    private static void sendBatch(NetRequest... requests) throws IOException {
-        sendBatch(null, requests);
+    private static int sendBatch(NetRequest... requests) throws IOException {
+        return sendBatch(null, requests);
     }
 
-    private static void sendBatch(List<Integer> ids, NetRequest... requests) throws IOException {
+    private static int sendBatch(List<Integer> ids, NetRequest... requests) throws IOException {
         ByteArrayOutputStream buffer = new ByteArrayOutputStream();
         for (NetRequest request : requests) buffer.write(frame(request));
         byte[] data = buffer.toByteArray();
+        int done = 0;
         try {
             synchronized (SEND_LOCK.get(null)) {
                 InputStream input = (InputStream)NET_INPUT.get(null);
                 OutputStream output = (OutputStream)NET_OUTPUT.get(null);
-                if (input == null || output == null) { connectionBroken = true; throw new IOException("Server connection unavailable"); }
+                if (input == null || output == null) { connectionBroken = true; return done; }
                 Com.isActiveRequest = true; Com.lastSendRequestTime = System.currentTimeMillis();
                 try {
                     Com.sentBytes += data.length;
                     output.write(data); output.flush();
-                    int done = 0;
-                    try {
-                        for (NetRequest request : requests) { readReply(input, request); done++; }
-                    } catch (IOException exception) {
-                        connectionBroken = true; brokenInput = input;
-                        throw new IOException("connection lost after " + done + "/" + requests.length
-                                + (ids == null ? "" : " replies, stalled on " + ids.get(done)) + ": " + exception);
+                    long[] waits = {3000L, 8000L, 15000L};
+                    while (done < requests.length) {
+                        try {
+                            readReply(input, requests[done], 2000);
+                            done++;
+                            continue;
+                        } catch (IOException stall) { }
+                        boolean recovered = false;
+                        for (long wait : waits) {
+                            System.out.println("batch reply " + (done + 1) + "/" + requests.length + " deferred by server, nudging with keepalive");
+                            byte[] nudge = frame(keepaliveRequest());
+                            Com.sentBytes += nudge.length;
+                            output.write(nudge); output.flush();
+                            pendingPongs++;
+                            try {
+                                readReply(input, requests[done], wait);
+                                done++;
+                                recovered = true;
+                                break;
+                            } catch (IOException ignored) { }
+                        }
+                        if (!recovered) break;
                     }
+                    if (done < requests.length) {
+                        connectionBroken = true; brokenInput = input;
+                        System.out.println("server stopped replying after " + done + "/" + requests.length
+                                + (ids == null ? "" : " replies, stalled on " + ids.get(done))
+                                + " (burst " + data.length + " bytes), draining socket");
+                        drainPongs(input, 500L, 64);
+                        killConnection();
+                        return done;
+                    }
+                    if (pendingPongs > 0) drainPongs(input, 2000L, pendingPongs);
+                    return done;
                 } finally {
                     Com.isActiveRequest = false; Com.lastSendRequestTime = System.currentTimeMillis();
                 }
             }
-        } catch (IllegalAccessException exception) { throw new IOException("Cannot access the game connection", exception); }
+        } catch (IllegalAccessException exception) {
+            throw new IOException("Cannot access the game connection", exception);
+        } catch (IOException exception) {
+            connectionBroken = true;
+            killConnection();
+            return done;
+        }
     }
 
-    private static void readReply(InputStream input, NetRequest request) throws IOException {
-        long deadline = System.currentTimeMillis() + 5000;
+    private static NetRequest keepaliveRequest() {
+        NetRequest request = new NetRequest();
+        request.writeHeader(6700000);
+        return request;
+    }
+
+    private static int readReply(InputStream input, NetRequest request, long timeoutMillis) throws IOException {
+        long deadline = System.currentTimeMillis() + timeoutMillis;
+        while (true) {
+            readFrame(input, request, deadline);
+            request.response.mark(4);
+            int code = request.response.readInt();
+            request.response.reset();
+            if (code != 6700001) return code;
+            handlePong(request);
+        }
+    }
+
+    private static void readFrame(InputStream input, NetRequest request, long deadline) throws IOException {
         int length = 0;
         for (int i = 0; i < 4; i++) length |= ((readByte(input, deadline) + 128) & 255) << (8 * i);
         if (length <= 0 || length > 2097152) throw new IOException("Invalid response length: " + length);
@@ -285,6 +390,40 @@ final class GatherCollector {
         request.responseBuffer = new ByteArrayInputStream(body);
         request.response = new DataInputStream(request.responseBuffer);
         request.success = true; request.responseReceived = true;
+    }
+
+    private static void handlePong(NetRequest pong) throws IOException {
+        if (pendingPongs > 0) pendingPongs--;
+        if (pong.response.available() < 5) return;
+        pong.response.readInt();
+        pong.response.mark(5);
+        pong.response.readByte();
+        int version = pong.response.readInt();
+        pong.response.reset();
+        int current = IndirectNetworkHandler.instance.getCurDataVersion();
+        if (version == 1 || version == current + 1) IndirectNetworkHandler.instance.loadFromStreamAndApply(pong.response);
+        else if (version > current + 1) System.out.println("keepalive events lost " + current + " -> " + version);
+    }
+
+    private static void drainPongs(InputStream input, long timeoutMillis, int limit) {
+        int drained = 0;
+        while (drained < limit) {
+            NetRequest frame = new NetRequest();
+            try {
+                readFrame(input, frame, System.currentTimeMillis() + timeoutMillis);
+            } catch (IOException stall) {
+                if (pendingPongs > 0) System.out.println("keepalive reply pending: " + pendingPongs);
+                return;
+            }
+            drained++;
+            try {
+                frame.response.mark(4);
+                int code = frame.response.readInt();
+                frame.response.reset();
+                if (code == 6700001) handlePong(frame);
+                else System.out.println("drained unexpected reply " + code);
+            } catch (IOException ignored) { }
+        }
     }
 
     private static int readByte(InputStream input, long deadline) throws IOException {

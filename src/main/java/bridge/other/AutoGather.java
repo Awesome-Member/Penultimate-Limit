@@ -13,7 +13,6 @@ import Moduls.Tile;
 import Moduls.TileMap;
 import Moduls.Town;
 import Moduls.quests.QuestSingle;
-import Moduls.quests.QuestStrateg;
 import bridge.movement.QuestFollower;
 import bridge.ui.ClickGui;
 import Engine.Camera;
@@ -286,15 +285,12 @@ public abstract class AutoGather extends ClickGui.Feature {
         if (waiting && now - waitingSince > 15000) { stop(game); return; }
         if (waiting || MenuManager.instance.guiHandler.isActive() || Com.dontFightAndAction || Com.mainTh.stopPaint) return;
         if (stage == 0 && !learnedQuests.isEmpty()) {
-            List<QuestSingle> pending = new ArrayList<QuestSingle>();
-            for (QuestSingle quest : learnedQuests) if (QuestStrateg.instance.findGetnQuest(quest) == null) pending.add(quest);
-            if (pending.isEmpty()) { learnedQuests.clear(); stop(game); return; }
             controls.disableControll(); game.gameControllAnalogData.disableControll();
             long start = System.nanoTime();
             int done;
             try {
                 done = GatherCollector.batchRun(route[0].key, jumpKeys(1, collectStage),
-                        jumpKeys(collectStage + 1, route.length - 1), route[route.length - 1].key, pending);
+                        jumpKeys(collectStage + 1, route.length - 1), route[route.length - 1].key, learnedQuests);
             } catch (Exception exception) {
                 System.out.println("[" + title + "] batch failed: " + exception);
                 learnedQuests.clear(); stop(game); return;
