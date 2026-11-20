@@ -5,9 +5,9 @@
   "compatibilityLevel": "JAVA_8",
   "mixins": [
     "GameMixin",
-    "JuiceMapBufferMixin",
+    "GatherMapBufferMixin",
     "QuestPortalMixin",
-    "JuicePortalMixin",
+    "GatherPortalMixin",
     "DesktopMixin",
     "TileMapMixin",
     "MovementMixin",
