@@ -82,6 +82,28 @@ public abstract class AutoGather extends ClickGui.Feature {
     public void stop(Game game) {
         enabled = false; stage = -1; waiting = false; portalStage = -1;
         game.gameControllDirectData.disableControll();
+        Com.GameTh.myPathReset();
+        stepAsideFromPortal();
+    }
+
+    private static final int[][] SIDES = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}, {1, 1}, {-1, -1}, {1, -1}, {-1, 1}};
+
+    private void stepAsideFromPortal() {
+        Strategist player = Strategist.instance;
+        TileMap map = Com.currentGameMap;
+        if (map == null || map.towns == null || map.cells == null) return;
+        for (Town town : map.towns) {
+            if (town == null || town.state != 0 || (town.type != 404 && town.type != 405)) continue;
+            if (Math.abs(player.cx - town.dx) > Tile.width || Math.abs(player.cy - town.dy) > Tile.height) continue;
+            for (int[] side : SIDES) {
+                int x = town.dx + side[0] * Tile.width, y = town.dy + side[1] * Tile.height;
+                int tileX = x / Tile.width, tileY = y / Tile.height;
+                if (tileX < 0 || tileY < 0 || tileX >= map.widthTl || tileY >= map.heightTl || map.cells[tileX][tileY].block) continue;
+                player.setGridPosition((short)x, (short)y);
+                return;
+            }
+            return;
+        }
     }
 
     public static void loadMapFor(boolean justLoading) {
